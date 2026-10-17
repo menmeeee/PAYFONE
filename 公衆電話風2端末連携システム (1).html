@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>公衆電話システム (受付 & キーパッド)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+        .key-btn:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen flex flex-col justify-center items-center p-4">
+
+    <!-- Setup Screen (Role Selection & UID Connection) -->
+    <div id="setup-screen" class="w-full max-w-md bg-slate-800 p-6 rounded-2xl shadow-2xl border border-slate-700">
+        <h1 class="text-2xl font-bold text-center text-emerald-400 mb-6 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-phone-flip"></i> 公衆電話 2端末連携
+        </h1>
+
+        <!-- My UID Section -->
+        <div class="bg-slate-900 p-4 rounded-xl mb-6 text-center border border-slate-700">
+            <p class="text-xs text-slate-400 mb-1">あなたの端末 UID（このIDを相手に入力してもらう）</p>
+            <div class="flex items-center justify-center gap-2">
+                <span id="my-uid" class="text-xl font-mono font-bold tracking-wider text-yellow-400">接続準備中...</span>
+                <button onclick="copyUID()" class="p-2 text-slate-400 hover:text-white transition">
+                    <i class="fa-regular fa-copy"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Mode Selection / Connection Input -->
+        <div class="space-y-4">
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">接続相手の UID を入力</label>
+                <input type="text" id="target-uid" placeholder="相手のUIDを入力..." 
+                    class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-center font-mono text-lg focus:outline-none focus:border-emerald-500 uppercase">
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 pt-2">
+                <button onclick="startConnection('reception')" class="bg-blue-600 hover:bg-blue-500 font-bold py-3 px-4 rounded-xl shadow-lg transition flex flex-col items-center gap-1">
+                    <i class="fa-solid fa-headset text-xl"></i>
+                    <span class="text-xs">受付側（親機）として接続</span>
+                </button>
+                <button onclick="startConnection('keypad')" class="bg-emerald-600 hover:bg-emerald-500 font-bold py-3 px-4 rounded-xl shadow-lg transition flex flex-col items-center gap-1">
+                    <i class="fa-solid fa-calculator text-xl"></i>
+                    <span class="text-xs">キーパッド（子機）として接続</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Connection Status Indicator -->
+        <div id="status-msg" class="mt-4 text-center text-xs text-slate-400 font-mono flex items-center justify-center gap-2">
+            <span class="inline-block w-2 h-2 rounded-full bg-yellow-500 animate-ping"></span> シグナリングサーバー接続中...
+        </div>
+    </div>
+
+    <!-- Reception Screen (Host / Receiver View) -->
+    <div id="reception-screen" class="hidden w-full max-w-lg bg-slate-800 p-6 rounded-2xl shadow-2xl border border-slate-700 flex-col gap-4">
+        <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+            <h2 class="text-xl font-bold text-blue-400 flex items-center gap-2">
+                <i class="fa-solid fa-headset"></i> 受付側モニター
+            </h2>
+            <span id="reception-status" class="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">接続完了</span>
+        </div>
+
+        <!-- Dynamic Dial Display -->
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-700 text-center">
+            <span class="text-xs text-slate-400 block mb-1">受信ダイヤル番号</span>
+            <div id="dial-display" class="text-4xl font-mono text-emerald-400 font-bold min-h-[3rem] tracking-widest flex items-center justify-center break-all">
+                ---
+            </div>
+        </div>
+
+        <!-- Speech Settings Customization -->
+        <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-700 space-y-3">
+            <h3 class="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-1">音声合成メッセージ設定</h3>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                    <label class="text-slate-400 block mb-1">数字押下時の前置き文</label>
+                    <input type="text" id="speech-prefix" value="番号 " class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="text-slate-400 block mb-1">数字押下時の後置き文</label>
+                    <input type="text" id="speech-suffix" value=" が押されました" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:outline-none focus:border-blue-500">
+                </div>
+            </div>
+            <div>
+                <label class="text-slate-400 block mb-1 text-xs">特設メッセージ（「#」ボタン用）</label>
+                <input type="text" id="speech-custom-hash" value="通話を開始します" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white text-xs focus:outline-none focus:border-blue-500">
+            </div>
+        </div>
+
+        <!-- Live Audio Stream Controls -->
+        <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-700 flex justify-between items-center">
+            <div>
+                <p class="text-sm font-semibold text-slate-200">生音声通話</p>
+                <p class="text-xs text-slate-400" id="audio-status">マイク送受信準備完了</p>
+            </div>
+            <button id="mic-toggle-btn" onclick="toggleMic()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2">
+                <i class="fa-solid fa-microphone"></i> マイク ON
+            </button>
+        </div>
+
+        <!-- Hidden Audio Player for Remote Stream -->
+        <audio id="remote-audio" autoplay playsinline></audio>
+    </div>
+
+    <!-- Keypad Screen (Client / Sender Fullscreen View) -->
+    <div id="keypad-screen" class="hidden fixed inset-0 bg-black flex-col justify-center items-center p-4 z-50">
+        <!-- Fullscreen Toggle Floating Button -->
+        <button id="fullscreen-btn" onclick="toggleFullscreen()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-xs flex items-center gap-1 bg-slate-900/80 px-3 py-2 rounded-lg border border-slate-800 shadow-md">
+            <i class="fa-solid fa-expand"></i> 全画面表示
+        </button>
+
+        <!-- Pure Keypad Controller -->
+        <div class="w-full max-w-xs flex flex-col items-center">
+            <!-- Dial Preview Screen -->
+            <div id="keypad-input-display" class="w-full bg-slate-950 text-emerald-400 font-mono text-3xl text-right p-4 rounded-2xl mb-6 border border-slate-800 shadow-inner h-16 flex items-center justify-end overflow-x-auto tracking-widest">
+            </div>
+
+            <!-- Keypad Matrix Buttons -->
+            <div class="grid grid-cols-3 gap-4 w-full">
+                <button onclick="pressKey('1')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">1</button>
+                <button onclick="pressKey('2')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">2</button>
+                <button onclick="pressKey('3')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">3</button>
+                <button onclick="pressKey('4')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">4</button>
+                <button onclick="pressKey('5')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">5</button>
+                <button onclick="pressKey('6')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">6</button>
+                <button onclick="pressKey('7')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">7</button>
+                <button onclick="pressKey('8')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">8</button>
+                <button onclick="pressKey('9')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">9</button>
+                <button onclick="pressKey('*')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-yellow-400 text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">＊</button>
+                <button onclick="pressKey('0')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-white text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">0</button>
+                <button onclick="pressKey('#')" class="key-btn bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-yellow-400 text-3xl font-bold h-20 rounded-2xl shadow-lg flex items-center justify-center border border-slate-700">＃</button>
+            </div>
+
+            <!-- Clear Action Control -->
+            <div class="mt-6 w-full flex justify-end">
+                <button onclick="clearKeypad()" class="text-xs text-red-400 hover:text-red-300 border border-red-900/60 bg-red-950/40 px-4 py-2 rounded-lg">クリア</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let peer = null;
+        let conn = null;
+        let mediaCall = null;
+        let localStream = null;
+        let role = ''; // 'reception' or 'keypad'
+        let currentDial = '';
+        let micEnabled = true;
+
+        // Initialize PeerJS Connection
+        function initPeer() {
+            // Generate simple unique ID
+            const randomId = 'payphone-' + Math.floor(1000 + Math.random() * 9000);
+            peer = new Peer(randomId, {
+                debug: 1
+            });
+
+            peer.on('open', (id) => {
+                document.getElementById('my-uid').innerText = id;
+                document.getElementById('status-msg').innerHTML = '<span class="text-emerald-400">✓ 接続準備完了（相手のUIDを入力してください）</span>';
+            });
+
+            peer.on('error', (err) => {
+                console.error('PeerJS Error:', err);
+                document.getElementById('status-msg').innerHTML = `<span class="text-red-400">エラー: ${err.type}</span>`;
+            });
+
+            // Listen for incoming Data Channel connection
+            peer.on('connection', (dataConn) => {
+                conn = dataConn;
+                setupDataConnection();
+            });
+
+            // Listen for incoming Live Audio Call
+            peer.on('call', async (call) => {
+                mediaCall = call;
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    mediaCall.answer(localStream);
+                    
+                    mediaCall.on('stream', (remoteStream) => {
+                        const audio = document.getElementById('remote-audio');
+                        audio.srcObject = remoteStream;
+                        audio.play().catch(e => console.log('Audio autoplay blocked:', e));
+                    });
+                } catch (err) {
+                    console.error('マイクアクセスの拒否またはエラー:', err);
+                }
+            });
+        }
+
+        // Establish WebRTC Data & Voice Stream with Selected Role
+        async function startConnection(selectedRole) {
+            role = selectedRole;
+            const targetUid = document.getElementById('target-uid').value.trim();
+
+            if (!targetUid) {
+                alert('相手のUIDを入力してください。');
+                return;
+            }
+
+            document.getElementById('status-msg').innerHTML = '<span class="text-yellow-400 animate-pulse">相手の端末に接続中...</span>';
+
+            // Connect Data Channel
+            conn = peer.connect(targetUid);
+            setupDataConnection();
+
+            // Initiate WebRTC Audio Call
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                const call = peer.call(targetUid, localStream);
+                mediaCall = call;
+
+                call.on('stream', (remoteStream) => {
+                    const audio = document.getElementById('remote-audio');
+                    audio.srcObject = remoteStream;
+                    audio.play().catch(e => console.log('Audio autoplay error:', e));
+                });
+            } catch (err) {
+                console.warn('マイクアクセスなしでデータ通信のみで継続します:', err);
+            }
+
+            switchToAppUI();
+        }
+
+        // Event handling for incoming Data Channel messages
+        function setupDataConnection() {
+            conn.on('open', () => {
+                document.getElementById('status-msg').innerText = '接続成功！';
+                switchToAppUI();
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'key') {
+                    handleKeyReceived(data.key);
+                }
+            });
+
+            conn.on('close', () => {
+                alert('相手との接続が切断されました。');
+            });
+        }
+
+        // Switch Screen Views according to user role
+        function switchToAppUI() {
+            document.getElementById('setup-screen').classList.add('hidden');
+
+            if (role === 'reception') {
+                document.getElementById('reception-screen').classList.remove('hidden');
+                document.getElementById('reception-screen').classList.add('flex');
+            } else if (role === 'keypad') {
+                document.getElementById('keypad-screen').classList.remove('hidden');
+                document.getElementById('keypad-screen').classList.add('flex');
+                toggleFullscreen();
+            }
+        }
+
+        // Handle received Keypad numbers and Trigger Web Speech API
+        function handleKeyReceived(key) {
+            currentDial += key;
+            document.getElementById('dial-display').innerText = currentDial;
+
+            // Speech Synthesis (Text-to-Speech)
+            if ('speechSynthesis' in window) {
+                let speechText = '';
+                const prefix = document.getElementById('speech-prefix').value;
+                const suffix = document.getElementById('speech-suffix').value;
+                const customHash = document.getElementById('speech-custom-hash').value;
+
+                if (key === '#') {
+                    speechText = customHash;
+                } else if (key === '*') {
+                    speechText = 'アスタリスク';
+                } else {
+                    speechText = `${prefix}${key}${suffix}`;
+                }
+
+                // Speech synthesis utterance execution
+                window.speechSynthesis.cancel(); // Cancel queue for immediate playback
+                const utterance = new SpeechSynthesisUtterance(speechText);
+                utterance.lang = 'ja-JP';
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        // Handle Key Press on Keypad Screen
+        function pressKey(key) {
+            const display = document.getElementById('keypad-input-display');
+            display.innerText += key;
+
+            // Send pressed key via DataChannel
+            if (conn && conn.open) {
+                conn.send({ type: 'key', key: key });
+            }
+        }
+
+        // Reset Keypad Display
+        function clearKeypad() {
+            document.getElementById('keypad-input-display').innerText = '';
+            currentDial = '';
+            if (role === 'reception') {
+                document.getElementById('dial-display').innerText = '---';
+            }
+        }
+
+        // Toggle Live Microphone Audio
+        function toggleMic() {
+            if (localStream) {
+                micEnabled = !micEnabled;
+                localStream.getAudioTracks().forEach(track => track.enabled = micEnabled);
+                
+                const btn = document.getElementById('mic-toggle-btn');
+                if (micEnabled) {
+                    btn.className = 'bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2';
+                    btn.innerHTML = '<i class="fa-solid fa-microphone"></i> マイク ON';
+                } else {
+                    btn.className = 'bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2';
+                    btn.innerHTML = '<i class="fa-solid fa-microphone-slash"></i> マイク OFF';
+                }
+            }
+        }
+
+        // Helper: Copy UID to Clipboard
+        function copyUID() {
+            const uidText = document.getElementById('my-uid').innerText;
+            if (uidText && !uidText.includes('接続準備中')) {
+                document.execCommand('copy');
+                alert('UIDをコピーしました: ' + uidText);
+            }
+        }
+
+        // Helper: Toggle Fullscreen Mode
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.log('Fullscreen request ignored:', err);
+                });
+            }
+        }
+
+        // Initialize PeerJS Engine on Load
+        window.onload = function() {
+            initPeer();
+        };
+    </script>
+</body>
+</html>
